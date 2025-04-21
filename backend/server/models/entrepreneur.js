@@ -49,6 +49,10 @@ const entrepreneurSchema = new mongoose.Schema(
       type: Object,
       default: {},
     },
+    time: {
+      type: Date,
+      required: false,
+    },
   },
   { timestamps: true }
 );
