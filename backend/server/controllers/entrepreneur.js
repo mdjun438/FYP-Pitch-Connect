@@ -4,6 +4,7 @@ const upload = require("../../utils/multer");
 const { Response } = require("../../utils/response");
 const fs = require("fs");
 const path = require("path");
+const mongoose = require("mongoose");
 const nodemailer = require("nodemailer");
 const stripe = require("stripe")(
   "sk_test_51MycIqD2171rDQ1bM2Vo43LraZJVqjoKBvTbP7yl52C5ShEqWmsSrT7kktdyrtUAuRwrOD8HRmqXnfFOXPULc7Xr00A9NYeUOU"
@@ -213,12 +214,44 @@ exports.deleteById = async (req, res) => {
 
 exports.findEntrepreneurs = async (req, res) => {
   try {
+    // First validate all company references exist
+    const invalidCompanies = await mongoose.connection.db
+      .collection("companies")
+      .find({
+        $or: [
+          { _id: { $exists: false } },
+          { entrepreneurId: { $exists: false } },
+          { entrepreneurId: { $type: "string" } }, // Catches string IDs that should be ObjectIds
+        ],
+      })
+      .toArray();
+
+    if (invalidCompanies.length > 0) {
+      console.warn("Found invalid companies:", invalidCompanies);
+      // Optionally clean up invalid references here
+      await mongoose.connection.db.collection("companies").deleteMany({
+        _id: { $in: invalidCompanies.map((c) => c._id) },
+      });
+    }
+
     const entrepreneurs = await Entrepreneur.aggregate([
       {
         $lookup: {
           from: "companies",
-          localField: "_id",
-          foreignField: "entrepreneurId",
+          let: { entrepreneurId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$entrepreneurId", "$$entrepreneurId"] },
+                    { $ne: ["$_id", null] },
+                  ],
+                },
+              },
+            },
+            { $sort: { createdAt: -1 } }, // Get most recent company first
+          ],
           as: "companies",
         },
       },
@@ -231,16 +264,38 @@ exports.findEntrepreneurs = async (req, res) => {
       {
         $lookup: {
           from: "documents",
-          localField: "companies._id",
-          foreignField: "companyId",
+          let: { companyId: "$companies._id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$companyId", "$$companyId"] },
+                    { $ne: ["$companyId", null] },
+                  ],
+                },
+              },
+            },
+          ],
           as: "companies.documents",
         },
       },
       {
         $lookup: {
           from: "videoimages",
-          localField: "companies._id",
-          foreignField: "companyId",
+          let: { companyId: "$companies._id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$companyId", "$$companyId"] },
+                    { $ne: ["$companyId", null] },
+                  ],
+                },
+              },
+            },
+          ],
           as: "companies.videoImages",
         },
       },
@@ -257,18 +312,96 @@ exports.findEntrepreneurs = async (req, res) => {
           skills: { $first: "$skills" },
           featured: { $first: "$featured" },
           featureTime: { $first: "$featureTime" },
-          companies: { $push: "$companies" },
+          companies: {
+            $push: {
+              $cond: {
+                if: {
+                  $and: [
+                    { $ne: ["$companies._id", null] },
+                    { $ne: ["$companies", null] },
+                  ],
+                },
+                then: "$companies",
+                else: null,
+              },
+            },
+          },
           bid: { $first: "$bid" },
         },
       },
       {
-        $sort: { featured: -1, featureTime: -1 }, // Sorting: featured first, then most recent featureTime
+        $addFields: {
+          companies: {
+            $filter: {
+              input: "$companies",
+              as: "company",
+              cond: {
+                $and: [
+                  { $ne: ["$$company", null] },
+                  { $ne: ["$$company._id", null] },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        $sort: { featured: -1, featureTime: -1 },
       },
     ]);
 
-    Response(res, 200, "Entrepreneur Fetch Successfully", entrepreneurs);
+    // Additional client-side validation
+    const validResults = entrepreneurs.map((entrepreneur) => ({
+      ...entrepreneur,
+      companies: entrepreneur.companies.filter(
+        (company) =>
+          company &&
+          mongoose.Types.ObjectId.isValid(company._id) &&
+          mongoose.Types.ObjectId.isValid(company.entrepreneurId)
+      ),
+    }));
+
+    Response(res, 200, "Entrepreneurs fetched successfully", validResults);
   } catch (error) {
-    Response(res, 500, "Error during find Entrepreneur", error.message);
+    console.error("Aggregation error:", {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+    });
+
+    // Fallback to simple find if aggregation fails
+    try {
+      console.warn("Falling back to simple find...");
+      const simpleResults = await Entrepreneur.find().populate({
+        path: "companies",
+        match: { _id: { $exists: true } },
+        populate: [
+          {
+            path: "documents",
+            match: { _id: { $exists: true } },
+          }, // Added missing comma and closing brace
+          {
+            path: "videoImages",
+            match: { _id: { $exists: true } },
+          },
+        ],
+      });
+
+      Response(
+        res,
+        200,
+        "Entrepreneurs fetched (fallback method)",
+        simpleResults
+      );
+    } catch (fallbackError) {
+      Response(res, 500, "Error fetching entrepreneurs", {
+        error: "Internal server error",
+        details:
+          process.env.NODE_ENV === "development"
+            ? fallbackError.message
+            : undefined,
+      });
+    }
   }
 };
 
@@ -427,6 +560,12 @@ exports.removeFeatured = async (req, res) => {
 exports.bid = async (req, res, next) => {
   try {
     const { id } = req.params;
+    // Add validation
+    if (!id || id === "undefined" || !mongoose.Types.ObjectId.isValid(id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid entrepreneur ID" });
+    }
     const { investor_id, bid_amount } = req.body;
 
     // Validate input
@@ -464,6 +603,11 @@ exports.bid = async (req, res, next) => {
 
 exports.getBidAmount = async (req, res) => {
   const { id } = req.params;
+  if (!id || id === "undefined" || !mongoose.Types.ObjectId.isValid(id)) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Invalid entrepreneur ID" });
+  }
   const findBid = await Entrepreneur.findById(id);
   if (!findBid) {
     res.status(404).json({ message: "Entrepreneur Not Found" });
@@ -524,7 +668,7 @@ exports.sendExtendMail = async (req, res) => {
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: "hsuntariq@gmail.com",
+        user: "junaid17chk@gmail.com",
         pass: "aucimlcaycvckbnf",
       },
     });
@@ -532,7 +676,7 @@ exports.sendExtendMail = async (req, res) => {
     // Send emails to all matching entrepreneurs
     for (const entrepreneur of entrepreneurs) {
       const mailOptions = {
-        from: "hsuntariq@gmail.com",
+        from: "junaid17chk@gmail.com",
         to: entrepreneur.email,
         subject: "Reminder: The Time is Almost Up!",
         html: `<!DOCTYPE html>
