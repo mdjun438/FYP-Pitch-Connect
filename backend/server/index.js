@@ -2,7 +2,7 @@ const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-
+const axios = require("axios");
 require("dotenv").config({ path: ["./.env"] });
 require("./config/mongo.js");
 
@@ -16,6 +16,7 @@ const companyRoutes = require("./routes/company.js");
 const videoImageRoutes = require("./routes/video-image.js");
 const documentRoutes = require("./routes/document.js");
 const { errorHandler } = require("../middlewares/errorMiddleware.js");
+const docusignRoutes = require("./routes/docusign");
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -39,6 +40,46 @@ app.use("/api/v1/pconnect-app/entrepreneur", entpreneurRoutes);
 app.use("/api/v1/pconnect-app/company", companyRoutes);
 app.use("/api/v1/pconnect-app/video-image", videoImageRoutes);
 app.use("/api/v1/pconnect-app/documents", documentRoutes);
+
+app.use("/api/docusign", docusignRoutes);
+
+const multer = require("multer");
+const fs = require("fs");
+const FormData = require("form-data");
+
+const upload = multer({ dest: "uploads/" });
+
+app.post("/upload-contract", upload.single("file"), async (req, res) => {
+  try {
+    const filePath = req.file.path;
+    const originalName = req.file.originalname;
+
+    const form = new FormData();
+    form.append("file", fs.createReadStream(filePath), originalName);
+
+    const response = await axios.post(
+      "https://app.docupanda.io/document",
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          "X-API-Key": "rKI1DZbbeUhohr1kS3cs26Z5om73",
+        },
+      }
+    );
+
+    // Clean up after successful upload
+    fs.unlinkSync(filePath);
+
+    res.json({ docupanda_response: response.data });
+  } catch (err) {
+    console.error(
+      "Upload to DocuPanda failed:",
+      err.response?.data || err.message
+    );
+    res.status(500).json({ error: "DocuPanda upload failed" });
+  }
+});
 app.use("/api/chat/", require("./routes/chat.js"));
 app.use("*", (req, res) => {
   return res.status(404).json({
@@ -50,6 +91,7 @@ app.use("*", (req, res) => {
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(errorHandler);
 
+// server.js
 // Create HTTP server.
 const server = http.createServer(app);
 
