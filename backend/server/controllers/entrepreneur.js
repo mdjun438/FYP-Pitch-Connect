@@ -669,7 +669,7 @@ exports.sendExtendMail = async (req, res) => {
       service: "gmail",
       auth: {
         user: "junaid17chk@gmail.com",
-        pass: "aucimlcaycvckbnf",
+        pass: "cgtyxnjtxducuamy",
       },
     });
 
@@ -814,7 +814,7 @@ exports.sendExtendMail = async (req, res) => {
                 }" class="cta-button">Extend Bid</a>
             </div>
             
-            <p class="message">If you have any questions or need assistance, please don't hesitate to contact our support team at junaid17chk@gmail.com or call us at +92 316 4729597.</p>
+            <p class="message">If you have any questions or need assistance, please don't hesitate to contact our support team at junaid@gmail.com or call us at +92 316 4729597.</p>
             
             <div class="signature">
                 <p>Warm regards,</p>

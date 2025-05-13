@@ -30,6 +30,7 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+app.use("/contracts", express.static(path.join(__dirname, "../contracts")));
 
 app.use("/api/v1/pconnect-app/approval", approvalRoutes);
 app.use("/api/v1/pconnect-app/admin", adminRoutes);
@@ -42,7 +43,8 @@ app.use("/api/v1/pconnect-app/video-image", videoImageRoutes);
 app.use("/api/v1/pconnect-app/documents", documentRoutes);
 
 app.use("/api/docusign", docusignRoutes);
-
+app.use("/api/prosperity", require("./routes/prosperity.js"));
+app.use("/api/contracts", require("./routes/contract.js"));
 const multer = require("multer");
 const fs = require("fs");
 const FormData = require("form-data");
